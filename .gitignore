@@ -4,3 +4,5 @@ x_auto.log
 __pycache__/
 *.pyc
 .DS_Store
+.env
+.env.*

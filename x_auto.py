@@ -15,6 +15,7 @@ X 全自动运营程序(x_auto)
 import argparse
 import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -157,6 +158,72 @@ def collect():
     return items
 
 
+# ---------------- LLM 文案 ----------------
+STYLE_SYSTEM = """你是我(中文 X 用户)的文案助理。输出必须像真人在手机上随手打的:
+- 短句、口语,可用语气词(啊/哈/吧/嘛/真的/讲真/笑死/有点东西)
+- 禁用 AI 腔:首先/其次/综上/总之/值得注意的是/作为一个/希望对你有帮助
+- 不排比、不堆 emoji、不喊口号、不自我介绍
+- 链接放最后,不加"链接在下面"
+- 只输出文案本身,不要解释、不加引号"""
+
+
+def llm_chat(user_prompt, timeout=45):
+    cfg = CFG.get("llm", {})
+    if not cfg.get("enabled", False):
+        return None
+    key = os.environ.get(cfg.get("api_key_env", "LLM_API_KEY"), "")
+    if not key:
+        env_file = BASE / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("LLM_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"')
+                    break
+    if not key:
+        return None
+    body = {
+        "model": cfg.get("model", "deepseek-chat"),
+        "messages": [{"role": "system", "content": STYLE_SYSTEM},
+                     {"role": "user", "content": user_prompt}],
+        "temperature": cfg.get("temperature", 0.95),
+        "max_tokens": cfg.get("max_tokens", 300),
+    }
+    req = urllib.request.Request(
+        cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions",
+        data=json.dumps(body).encode(), method="POST",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode())
+        return (d["choices"][0]["message"]["content"] or "").strip()
+    except Exception as e:
+        log("llm err: %s" % str(e)[:120])
+        return None
+
+
+def gen_post(item):
+    prompt = ("素材:GitHub 仓库 %s,star %s,简介:%s,链接:%s\n"
+              "写一条中文推文:一句洞察 + 仓库名和 star + 链接 + 一个具体问题,不超过 240 字符。口语。" % (
+                  item.get("name"), item.get("stars"), (item.get("desc") or "")[:100], item.get("url")))
+    t = llm_chat(prompt)
+    return t.strip() if t else make_post(item)
+
+
+def gen_comment(item, snippet):
+    prompt = ("原帖内容:%s\n可提到的仓库:%s(star %s,链接 %s)\n"
+              "写一条 1-2 句中文评论:先接对方的话,再补一个信息点或经验;不吹捧;链接可选,放最后。不超过 100 字。" % (
+                  (snippet or "")[:150], item.get("name"), item.get("stars"), item.get("url")))
+    t = llm_chat(prompt)
+    return t.strip() if t else make_comment(item, snippet)
+
+
+def gen_reply(snippet):
+    prompt = "有人回复我:%s\n写一句 1-2 句中文回复,口语,像真人聊天,不超过 60 字。" % (snippet or "")[:150]
+    t = llm_chat(prompt)
+    return t.strip() if t else random.choice(CFG["templates"]["reply"])
+
+
 # ---------------- 文案 ----------------
 def fill(tpl, item):
     return tpl.format(
@@ -289,7 +356,8 @@ def do_reply_mentions(page, max_replies=3):
             human_pause(2.5, 4)
             page.click('[data-testid="tweetTextarea_0"]', timeout=12000)
             human_pause(0.5, 1)
-            page.keyboard.type(random.choice(CFG["templates"]["reply"]), delay=random.randint(35, 80))
+            snippet = (a.inner_text() or "")[:200]
+            page.keyboard.type(gen_reply(snippet), delay=random.randint(35, 80))
             human_pause(1, 2)
             page.click('[data-testid="tweetButtonInline"]', timeout=12000)
             human_pause(2.5, 4)
@@ -334,7 +402,7 @@ def tick(page, st):
 
     # 1) 发帖(如果还有额度且随机决定)
     if st["posts"] < CFG["limits"].get("daily_posts", 8) and random.random() < CFG["limits"].get("post_ratio", 0.35):
-        text = make_post(item)
+        text = gen_post(item)
         fp = fingerprint(text)
         if fp in st.get("texts", []):
             log("duplicate text, skip")
@@ -365,7 +433,7 @@ def tick(page, st):
     for url, snippet in cands:
         if url in st.get("commented_urls", []):
             continue
-        text = make_comment(item, snippet)
+        text = gen_comment(item, snippet)
         if fingerprint(text) in st.get("texts", []):
             continue
         try:
@@ -408,10 +476,10 @@ def main():
         for it in items[:5]:
             print("-", it["name"], "|", it["stars"], "|", it["url"])
         if items:
-            print("\n--- sample post ---")
-            print(make_post(items[0]))
-            print("\n--- sample comment ---")
-            print(make_comment(items[0]))
+            print("\n--- sample post (LLM if configured) ---")
+            print(gen_post(items[0]))
+            print("\n--- sample comment (LLM if configured) ---")
+            print(gen_comment(items[0], "这个确实"))
         return
 
     from playwright.sync_api import sync_playwright

@@ -58,6 +58,20 @@ python x_auto.py --once      # 只跑一轮
 python x_auto.py --headless  # 无头(不推荐,易被识别)
 ```
 
+## 二·五、LLM 文案(让帖子/评论不像模板)
+
+1. 在目录下建 `.env` 文件:
+   ```
+   LLM_API_KEY=sk-xxxxx
+   ```
+   (或设置同名环境变量)
+2. `config.json` 的 `llm` 段:
+   - `enabled`:true / false(false = 回退模板)
+   - `base_url`:OpenAI 兼容端点(默认 `https://api.deepseek.com/v1`)
+   - `model`:`deepseek-chat`(或任何兼容模型)
+   - `temperature`:0.95(越高越活泼)
+3. LLM 调用失败会自动回退模板,不阻塞运行;日志里会写 `llm err`。
+
 ## 三、参数(config.json)
 
 | 键 | 含义 | 默认 |

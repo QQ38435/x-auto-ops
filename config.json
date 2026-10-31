@@ -1,4 +1,12 @@
 {
+  "llm": {
+    "enabled": true,
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key_env": "LLM_API_KEY",
+    "temperature": 0.95,
+    "max_tokens": 300
+  },
   "sources": {
     "github_days": 14,
     "github_keywords": ["AI skills", "agent skills", "claude skills"],
