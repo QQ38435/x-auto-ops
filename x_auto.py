@@ -47,7 +47,26 @@ def load_json(path, default):
 
 
 def save_json(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def acquire_lock():
+    """跨平台单实例锁:拿不到锁返回 None。"""
+    lock_path = BASE / ".lock"
+    f = open(lock_path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except Exception:
+        f.close()
+        return None
 
 
 def now():
@@ -477,6 +496,11 @@ def main():
     if not CFG:
         log("config.json missing")
         sys.exit(1)
+
+    lock = acquire_lock()
+    if not lock:
+        log("another instance is running (lock held) — exit")
+        return
 
     if args.dry_run:
         items = collect()
