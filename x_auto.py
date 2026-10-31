@@ -482,6 +482,43 @@ def next_sleep():
     return random.randint(lim.get("gap_min", 20) * 60, lim.get("gap_max", 90) * 60)
 
 
+def run_test(page):
+    """强制测试:发 1 帖 + 评论 1 条(忽略静默与限额)。"""
+    st = load_state()
+    items = collect()
+    if not items:
+        log("test: no items")
+        return
+    item = items[0]
+    text = gen_post(item)
+    url = do_post(page, text)
+    st["posts"] += 1
+    st["hour_count"] += 1
+    st["posted_urls"].append(item["url"])
+    st["texts"].append(fingerprint(text))
+    save_state(st)
+    log("TEST POSTED %s | %s" % (url, text[:60]))
+
+    kw = random.choice(CFG.get("sources", {}).get("search_keywords", ["AI skills"]))
+    cands = find_candidate_posts(page, kw, limit=3)
+    for u, snip in cands:
+        if u in st.get("commented_urls", []):
+            continue
+        ctext = gen_comment(item, snip)
+        try:
+            do_comment(page, u, ctext)
+            st["comments"] += 1
+            st["hour_count"] += 1
+            st["commented_urls"].append(u)
+            st["texts"].append(fingerprint(ctext))
+            save_state(st)
+            log("TEST COMMENTED %s | %s" % (u, ctext[:50]))
+            return
+        except Exception as e:
+            log("test comment failed: %s" % str(e)[:80])
+    log("test: post done, no comment target")
+
+
 # ---------------- 入口 ----------------
 def main():
     ap = argparse.ArgumentParser()
@@ -489,6 +526,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只搜集+生成文案")
     ap.add_argument("--once", action="store_true", help="只跑一轮")
     ap.add_argument("--headless", action="store_true", help="无头模式")
+    ap.add_argument("--test", action="store_true", help="强制测试:发 1 帖 + 评论 1 条(忽略静默/限额)")
     args = ap.parse_args()
 
     global CFG
@@ -534,6 +572,11 @@ def main():
             log("NOT LOGGED IN — run: python x_auto.py --login")
             ctx.close()
             sys.exit(2)
+
+        if args.test:
+            run_test(page)
+            ctx.close()
+            return
 
         st = load_state()
         log("START (posts=%d comments=%d replies=%d)" % (st["posts"], st["comments"], st["replies"]))
