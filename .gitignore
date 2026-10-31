@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+
+.lock
+state.json.tmp
