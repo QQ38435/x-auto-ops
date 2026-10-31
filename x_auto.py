@@ -495,12 +495,14 @@ def main():
         ctx, page = launch(pw, headless=args.headless)
         if args.login:
             page.goto("https://x.com/login", wait_until="domcontentloaded")
-            print(">>> 在浏览器里登录 X,登录完成后回到这里按 Enter 保存登录态...")
-            input()
-            if is_logged_in(page):
-                log("LOGIN OK")
-            else:
-                log("LOGIN FAILED (still not logged in)")
+            print(">>> 在浏览器里登录 X(最多等 5 分钟,登录成功后自动继续)...")
+            ok = False
+            for _ in range(30):
+                time.sleep(10)
+                if is_logged_in(page):
+                    ok = True
+                    break
+            log("LOGIN OK" if ok else "LOGIN TIMEOUT")
             ctx.close()
             return
 

@@ -67,8 +67,10 @@ python x_auto.py --headless  # 无头(不推荐,易被识别)
    (或设置同名环境变量)
 2. `config.json` 的 `llm` 段:
    - `enabled`:true / false(false = 回退模板)
-   - `base_url`:OpenAI 兼容端点(默认 `https://api.deepseek.com/v1`)
-   - `model`:`deepseek-chat`(或任何兼容模型)
+   - `base_url`:`https://openrouter.ai/api/v1`(OpenRouter)
+   - `model`:`nvidia/nemotron-3-ultra-550b-a55b:free`(免费池实测唯一稳定出文本)
+   - `fallback_models`:4 个备用免费模型,遇到 429/空输出自动轮换
+   - `max_tokens`:**800**(reasoning 模型必须 ≥600,否则思考吃满、正文为空)
    - `temperature`:0.95(越高越活泼)
 3. LLM 调用失败会自动回退模板,不阻塞运行;日志里会写 `llm err`。
 
