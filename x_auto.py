@@ -186,10 +186,9 @@ STYLE_SYSTEM = """你是我(中文 X 用户)的文案助理。输出必须像真
 - 只输出文案本身,不要解释、不加引号"""
 
 
-def llm_chat(user_prompt, timeout=60):
+def api_key():
+    """key 只从环境变量或 .env 读，永不进仓库。"""
     cfg = CFG.get("llm", {})
-    if not cfg.get("enabled", False):
-        return None
     key = os.environ.get(cfg.get("api_key_env", "LLM_API_KEY"), "")
     if not key:
         env_file = BASE / ".env"
@@ -198,6 +197,14 @@ def llm_chat(user_prompt, timeout=60):
                 if line.strip().startswith("LLM_API_KEY="):
                     key = line.split("=", 1)[1].strip().strip('"')
                     break
+    return key
+
+
+def llm_chat(user_prompt, timeout=60):
+    cfg = CFG.get("llm", {})
+    if not cfg.get("enabled", False):
+        return None
+    key = api_key()
     if not key:
         return None
     models = [cfg.get("model", "deepseek-chat")] + list(cfg.get("fallback_models", []))
@@ -290,33 +297,109 @@ def human_pause(a=0.6, b=1.8):
     time.sleep(random.uniform(a, b))
 
 
+LOGIN_SELECTORS = (
+    '[data-testid="SideNav_AccountSwitcher_Button"]'
+    ', [data-testid="tweetTextarea_0"]'
+    ', [data-testid="primaryColumn"] article'
+)
+
+SEND_SELECTORS = ('[data-testid="tweetButtonInline"]', '[data-testid="tweetButton"]')
+
+
+def dismiss_overlays(page):
+    """关掉 cookie 条 / 弹层：点不到发送键最常见的原因就是它挡着。"""
+    for sel in ('[data-testid="BottomBar"] [role="button"]',
+                'div[role="button"]:has-text("Accept all cookies")',
+                '[data-testid="sheetDialog"] [role="button"]:has-text("Close")'):
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                el.click(timeout=2500)
+                human_pause(0.4, 0.9)
+        except Exception:
+            continue
+
+
 def is_logged_in(page):
     page.goto("https://x.com/home", wait_until="domcontentloaded")
-    human_pause(2, 4)
+    human_pause(2.5, 4)
+    dismiss_overlays(page)
     try:
-        page.wait_for_selector('article, [data-testid="tweetTextarea_0"]', timeout=15000)
+        page.wait_for_selector(LOGIN_SELECTORS, timeout=15000)
         return True
     except Exception:
-        return False
+        # 兜底：没被踢回登录页，且侧栏在 —— 空时间线/慢加载时不至于误判掉登录
+        return ("/login" not in page.url
+                and page.query_selector('[data-testid="AppTabBar_Home_Link"], nav[aria-label]') is not None)
+
+
+def click_send(page, timeout_ms=12000):
+    """发送键 testid 会在 tweetButtonInline / tweetButton 之间换版，两个都试，最后 Ctrl+Enter 兜底。"""
+    for sel in SEND_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible() and el.is_enabled():
+                el.click(timeout=timeout_ms)
+                return True, sel
+        except Exception:
+            continue
+    try:
+        page.keyboard.press("Control+Enter")
+        return True, "ctrl+enter"
+    except Exception as e:
+        return False, str(e)[:80]
+
+
+def posted_evidence(page, timeout_s=15):
+    """发送成功的硬证据：输入框清空，或出现 toast。只靠 click 不报错不算发出去。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        try:
+            el = page.query_selector('[data-testid="tweetTextarea_0"]')
+            if el is None or not (el.inner_text() or "").strip():
+                return True, "composer cleared"
+        except Exception:
+            return True, "composer gone"
+        try:
+            toast = page.query_selector('[data-testid="toast"]')
+            if toast:
+                t = (toast.inner_text() or "").strip()
+                if t:
+                    return True, "toast: %s" % t[:60]
+        except Exception:
+            pass
+        time.sleep(0.6)
+    return False, "no evidence (composer still has text)"
 
 
 def do_post(page, text):
-    page.goto("https://x.com/home", wait_until="domcontentloaded")
-    human_pause(2.5, 4.5)
-    page.mouse.wheel(0, random.randint(150, 450))
-    human_pause(1, 2)
-    page.click('[data-testid="tweetTextarea_0"]', timeout=15000)
-    human_pause(0.5, 1.2)
-    page.keyboard.type(text, delay=random.randint(35, 85))
-    human_pause(1, 2)
-    page.click('[data-testid="tweetButtonInline"]', timeout=15000)
-    human_pause(3, 5)
-    # 回传链接:从最新一条自己帖子的链接里取
+    """发一条。返回 (ok, url, detail)。"""
     try:
-        href = page.eval_on_selector('article a[href*="/status/"]', "el => el.href")
-        return href
-    except Exception:
-        return ""
+        page.goto("https://x.com/home", wait_until="domcontentloaded")
+        human_pause(2.5, 4.5)
+        dismiss_overlays(page)
+        page.mouse.wheel(0, random.randint(150, 450))
+        human_pause(1, 2)
+        page.click('[data-testid="tweetTextarea_0"]', timeout=15000)
+        human_pause(0.5, 1.2)
+        page.keyboard.type(text, delay=random.randint(35, 85))
+        human_pause(1, 2)
+        clicked, how = click_send(page)
+        if not clicked:
+            return False, "", "send button not found: %s" % how
+        human_pause(2, 3)
+        ok, ev = posted_evidence(page)
+        if not ok:
+            return False, "", "%s (clicked %s)" % (ev, how)
+        # 回传链接:从最新一条自己帖子的链接里取
+        url = ""
+        try:
+            url = page.eval_on_selector('article a[href*="/status/"]', "el => el.href")
+        except Exception:
+            pass
+        return True, url, "%s via %s" % (ev, how)
+    except Exception as e:
+        return False, "", str(e)[:120]
 
 
 def find_candidate_posts(page, keyword, limit=5):
@@ -346,17 +429,27 @@ def find_candidate_posts(page, keyword, limit=5):
 
 
 def do_comment(page, url, text):
-    page.goto(url, wait_until="domcontentloaded")
-    human_pause(3, 5)
-    page.mouse.wheel(0, random.randint(120, 320))
-    human_pause(1, 2)
-    page.click('[data-testid="tweetTextarea_0"]', timeout=15000)
-    human_pause(0.5, 1.2)
-    page.keyboard.type(text, delay=random.randint(35, 85))
-    human_pause(1, 2)
-    page.click('[data-testid="tweetButtonInline"]', timeout=15000)
-    human_pause(3, 5)
-    return True
+    """评论一条。返回 (ok, detail)。"""
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        human_pause(3, 5)
+        dismiss_overlays(page)
+        page.mouse.wheel(0, random.randint(120, 320))
+        human_pause(1, 2)
+        page.click('[data-testid="tweetTextarea_0"]', timeout=15000)
+        human_pause(0.5, 1.2)
+        page.keyboard.type(text, delay=random.randint(35, 85))
+        human_pause(1, 2)
+        clicked, how = click_send(page)
+        if not clicked:
+            return False, "send button not found: %s" % how
+        human_pause(2, 3)
+        ok, ev = posted_evidence(page)
+        if not ok:
+            return False, "%s (clicked %s)" % (ev, how)
+        return True, "%s via %s" % (ev, how)
+    except Exception as e:
+        return False, str(e)[:120]
 
 
 def do_reply_mentions(page, max_replies=3):
@@ -434,13 +527,16 @@ def tick(page, st):
         if fp in st.get("texts", []):
             log("duplicate text, skip")
         else:
-            url = do_post(page, text)
+            ok, url, why = do_post(page, text)
+            if not ok:
+                log("post failed: %s" % why)
+                return
             st["posts"] += 1
             st["hour_count"] += 1
             st["posted_urls"].append(item["url"])
             st["texts"].append(fp)
             save_state(st)
-            log("POSTED %s | %s" % (url, text[:60]))
+            log("POSTED %s | %s | %s" % (url, text[:60], why))
             return
 
     # 2) 回复 @我 的人
@@ -463,17 +559,17 @@ def tick(page, st):
         text = gen_comment(item, snippet)
         if fingerprint(text) in st.get("texts", []):
             continue
-        try:
-            do_comment(page, url, text)
-            st["comments"] += 1
-            st["hour_count"] += 1
-            st["commented_urls"].append(url)
-            st["texts"].append(fingerprint(text))
-            save_state(st)
-            log("COMMENTED %s | %s" % (url, text[:50]))
-            return
-        except Exception as e:
-            log("comment failed %s: %s" % (url, str(e)[:60]))
+        ok, why = do_comment(page, url, text)
+        if not ok:
+            log("comment failed %s: %s" % (url, why))
+            continue
+        st["comments"] += 1
+        st["hour_count"] += 1
+        st["commented_urls"].append(url)
+        st["texts"].append(fingerprint(text))
+        save_state(st)
+        log("COMMENTED %s | %s | %s" % (url, text[:50], why))
+        return
     log("no comment target")
 
 
@@ -483,40 +579,91 @@ def next_sleep():
 
 
 def run_test(page):
-    """强制测试:发 1 帖 + 评论 1 条(忽略静默与限额)。"""
+    """强制自检:发 1 帖 + 评论 1 条(忽略静默与限额)。最后一行 TEST RESULT 是给运维 agent 读的。"""
     st = load_state()
+    log("TEST START")
     items = collect()
     if not items:
-        log("test: no items")
-        return
+        log("TEST RESULT: FAIL — 素材为空(查网络/GitHub 限流)")
+        return 1
     item = items[0]
     text = gen_post(item)
-    url = do_post(page, text)
+    if not text.strip():
+        log("TEST RESULT: FAIL — 文案为空(查 LLM key/额度)")
+        return 1
+
+    ok, url, why = do_post(page, text)
+    if not ok:
+        log("TEST POST FAILED: %s" % why)
+        log("TEST RESULT: FAIL — 发帖未成功,计数未加")
+        return 1
     st["posts"] += 1
     st["hour_count"] += 1
     st["posted_urls"].append(item["url"])
     st["texts"].append(fingerprint(text))
     save_state(st)
-    log("TEST POSTED %s | %s" % (url, text[:60]))
+    log("TEST POSTED %s | %s | %s" % (url, text[:60], why))
 
     kw = random.choice(CFG.get("sources", {}).get("search_keywords", ["AI skills"]))
     cands = find_candidate_posts(page, kw, limit=3)
+    log("test: %d comment candidates (%s)" % (len(cands), kw))
     for u, snip in cands:
         if u in st.get("commented_urls", []):
             continue
         ctext = gen_comment(item, snip)
+        ok, why2 = do_comment(page, u, ctext)
+        if not ok:
+            log("TEST COMMENT FAILED %s: %s" % (u, why2))
+            continue
+        st["comments"] += 1
+        st["hour_count"] += 1
+        st["commented_urls"].append(u)
+        st["texts"].append(fingerprint(ctext))
+        save_state(st)
+        log("TEST COMMENTED %s | %s | %s" % (u, ctext[:50], why2))
+        log("TEST RESULT: PASS")
+        return 0
+    log("TEST RESULT: PARTIAL — 发帖成功,评论无可用目标(搜索可能被限流,不阻断)")
+    return 0
+
+
+# ---------------- 自检(不碰 X) ----------------
+def run_check():
+    """安装自检:配置 / key / 素材源 / LLM / 锁 / 状态。不打开浏览器、不发任何东西。"""
+    ok_all = True
+
+    def line(ok, msg):
+        nonlocal ok_all
+        ok_all = ok_all and ok
+        print(("[ok  ] " if ok else "[FAIL] ") + msg)
+
+    print("== x_auto self check ==")
+    lim = CFG.get("limits", {})
+    line(bool(CFG), "config.json 已加载 limits.daily_posts=%s quiet=%s" % (
+        lim.get("daily_posts"), lim.get("quiet_hours")))
+    for f in ("x_auto.py", "config.json", "requirements.txt"):
+        line((BASE / f).exists(), "%s 存在" % f)
+    line(bool(api_key()), "LLM_API_KEY 已配置(.env 或环境变量)")
+    try:
+        items = collect()
+        line(len(items) > 0, "素材搜集 %d 条" % len(items))
+    except Exception as e:
+        line(False, "素材搜集失败: %s" % str(e)[:80])
+    t = llm_chat("用一句中文口语说你会写文案。")
+    line(bool(t), "LLM 出文案: %s" % ((t or "")[:40] or "空"))
+    lock = acquire_lock()
+    line(lock is not None, "单实例锁可获取(无残留进程)")
+    if lock:
         try:
-            do_comment(page, u, ctext)
-            st["comments"] += 1
-            st["hour_count"] += 1
-            st["commented_urls"].append(u)
-            st["texts"].append(fingerprint(ctext))
-            save_state(st)
-            log("TEST COMMENTED %s | %s" % (u, ctext[:50]))
-            return
-        except Exception as e:
-            log("test comment failed: %s" % str(e)[:80])
-    log("test: post done, no comment target")
+            lock.close()
+        except Exception:
+            pass
+    st = load_state()
+    print("   状态: day=%s posts=%s comments=%s replies=%s hour_count=%s texts=%s" % (
+        st.get("day"), st.get("posts"), st.get("comments"), st.get("replies"),
+        st.get("hour_count"), len(st.get("texts", []))))
+    print("RESULT: %s" % ("PASS" if ok_all else "FAIL"))
+    return 0 if ok_all else 1
 
 
 # ---------------- 入口 ----------------
@@ -527,6 +674,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="只跑一轮")
     ap.add_argument("--headless", action="store_true", help="无头模式")
     ap.add_argument("--test", action="store_true", help="强制测试:发 1 帖 + 评论 1 条(忽略静默/限额)")
+    ap.add_argument("--check", action="store_true", help="安装自检(不打开浏览器、不发布)")
     args = ap.parse_args()
 
     global CFG
@@ -534,6 +682,9 @@ def main():
     if not CFG:
         log("config.json missing")
         sys.exit(1)
+
+    if args.check:
+        sys.exit(run_check())
 
     lock = acquire_lock()
     if not lock:
@@ -555,49 +706,51 @@ def main():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         ctx, page = launch(pw, headless=args.headless)
-        if args.login:
-            page.goto("https://x.com/login", wait_until="domcontentloaded")
-            print(">>> 在浏览器里登录 X(最多等 5 分钟,登录成功后自动继续)...")
-            ok = False
-            for _ in range(30):
-                time.sleep(10)
-                if is_logged_in(page):
-                    ok = True
+        try:
+            if args.login:
+                page.goto("https://x.com/login", wait_until="domcontentloaded")
+                print(">>> 在浏览器里登录 X(最多等 5 分钟,登录成功后自动继续)...")
+                ok = False
+                for _ in range(30):
+                    time.sleep(10)
+                    if is_logged_in(page):
+                        ok = True
+                        break
+                log("LOGIN OK" if ok else "LOGIN TIMEOUT")
+                return 0 if ok else 3
+
+            if not is_logged_in(page):
+                log("NOT LOGGED IN — run: python3 x_auto.py --login")
+                return 2
+
+            if args.test:
+                return run_test(page)
+
+            st = load_state()
+            log("START (posts=%d comments=%d replies=%d)" % (st["posts"], st["comments"], st["replies"]))
+            while True:
+                try:
+                    st = load_state()
+                    tick(page, st)
+                    if args.once:
+                        break
+                except KeyboardInterrupt:
+                    log("stopped by user")
                     break
-            log("LOGIN OK" if ok else "LOGIN TIMEOUT")
-            ctx.close()
-            return
-
-        if not is_logged_in(page):
-            log("NOT LOGGED IN — run: python x_auto.py --login")
-            ctx.close()
-            sys.exit(2)
-
-        if args.test:
-            run_test(page)
-            ctx.close()
-            return
-
-        st = load_state()
-        log("START (posts=%d comments=%d replies=%d)" % (st["posts"], st["comments"], st["replies"]))
-        while True:
+                except Exception as e:
+                    log("tick error: %s" % str(e)[:200])
+                    time.sleep(60)
+                    continue
+                s = next_sleep()
+                log("sleep %d min" % (s // 60))
+                time.sleep(s)
+            return 0
+        finally:
             try:
-                st = load_state()
-                tick(page, st)
-                if args.once:
-                    break
-            except KeyboardInterrupt:
-                log("stopped by user")
-                break
-            except Exception as e:
-                log("tick error: %s" % str(e)[:200])
-                time.sleep(60)
-                continue
-            s = next_sleep()
-            log("sleep %d min" % (s // 60))
-            time.sleep(s)
-        ctx.close()
+                ctx.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

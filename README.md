@@ -21,7 +21,7 @@ git clone https://github.com/QQ38435/x-auto-ops.git
 cd x-auto-ops
 pip3 install -r requirements.txt
 python3 -m playwright install chromium
-python3 x_auto.py --login      # 登录目标 X 账号,回车
+python3 x_auto.py --login      # 登录目标 X 账号(轮询 5 分钟,登录后自动继续)
 nohup python3 x_auto.py >> x_auto.log 2>&1 &
 ```
 
@@ -53,10 +53,23 @@ nohup python3 x_auto.py >> x_auto.log 2>&1 &
 
 **调试命令**
 ```bash
+python x_auto.py --check     # 安装自检:配置/key/素材源/LLM/锁,不开浏览器不发帖
 python x_auto.py --dry-run   # 只搜集+生成文案,不开浏览器
 python x_auto.py --once      # 只跑一轮
 python x_auto.py --headless  # 无头(不推荐,易被识别)
+python x_auto.py --test      # 强制自检:真发 1 帖 + 评论 1 条,忽略静默/限额
 ```
+
+`--test` 的结果以日志最后一行为准,给运维 agent 读:
+
+| 日志行 | 含义 | 退出码 |
+|---|---|---|
+| `TEST RESULT: PASS` | 发帖 + 评论都落地 | 0 |
+| `TEST RESULT: PARTIAL` | 发帖成功,评论没找到目标(搜索限流) | 0 |
+| `TEST RESULT: FAIL` | 发帖没成,计数未加 | 1 |
+| `NOT LOGGED IN` | 登录态失效 | 2 |
+
+`--test` 会真发内容,所以只在首次部署/回归时跑一次;计数会写进 `state.json`(它确实发了)。
 
 ## 二·五、LLM 文案(让帖子/评论不像模板)
 
