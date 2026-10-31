@@ -1,0 +1,45 @@
+{
+  "sources": {
+    "github_days": 14,
+    "github_keywords": ["AI skills", "agent skills", "claude skills"],
+    "rss_feeds": [
+      "https://www.coindesk.com/arc/outboundfeeds/rss/",
+      "https://cointelegraph.com/rss",
+      "https://airdrops.io/feed/"
+    ],
+    "search_keywords": ["AI skills", "agentic", "airdrop", "AI tools"]
+  },
+  "limits": {
+    "daily_posts": 8,
+    "daily_comments": 30,
+    "daily_replies": 8,
+    "per_hour": 3,
+    "gap_min": 15,
+    "gap_max": 60,
+    "quiet_hours": [0, 8],
+    "max_chars": 260,
+    "post_ratio": 0.35
+  },
+  "templates": {
+    "post": [
+      "又一个 AI skill 冲上来了:{name},{stars} star。{desc} 装之前先看它跑什么命令哈。{url} 你们常驻几个?",
+      "说句实话,skill 装多了真会乱。最近只留了 {name},还行。{desc} {url}",
+      "这个真可以。{name} 已经 {stars} star 了,{desc} 链接放这:{url}",
+      "翻到一个有点东西的:{name}。{desc} {url}",
+      "刚看到 {name},{stars} star。{desc} 你们用过没?{url}"
+    ],
+    "comment": [
+      "这个确实。{snippet}…我也踩过,后来改成小步跑才顺。",
+      "哈,你说到这个我认。{snippet}…不过我更担心它乱执行命令。",
+      "讲真,{snippet} 这块我也在踩坑。{name} 的思路你可以看看:{url}",
+      "有道理。我这边是先把流程写死再让 agent 跑,省事不少。"
+    ],
+    "reply": [
+      "对,我也是这么干的。先小范围试,不行就撤。",
+      "嗯…看场景吧,我这边主要图省事。",
+      "笑死,我也遇到过。",
+      "有道理,回头试试。",
+      "确实,先跑通再优化。"
+    ]
+  }
+}

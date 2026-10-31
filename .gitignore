@@ -1,0 +1,6 @@
+profile/
+state.json
+x_auto.log
+__pycache__/
+*.pyc
+.DS_Store
