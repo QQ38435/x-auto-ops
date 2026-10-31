@@ -167,7 +167,7 @@ STYLE_SYSTEM = """你是我(中文 X 用户)的文案助理。输出必须像真
 - 只输出文案本身,不要解释、不加引号"""
 
 
-def llm_chat(user_prompt, timeout=45):
+def llm_chat(user_prompt, timeout=60):
     cfg = CFG.get("llm", {})
     if not cfg.get("enabled", False):
         return None
@@ -181,25 +181,33 @@ def llm_chat(user_prompt, timeout=45):
                     break
     if not key:
         return None
-    body = {
-        "model": cfg.get("model", "deepseek-chat"),
-        "messages": [{"role": "system", "content": STYLE_SYSTEM},
-                     {"role": "user", "content": user_prompt}],
-        "temperature": cfg.get("temperature", 0.95),
-        "max_tokens": cfg.get("max_tokens", 300),
-    }
-    req = urllib.request.Request(
-        cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions",
-        data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            d = json.loads(r.read().decode())
-        return (d["choices"][0]["message"]["content"] or "").strip()
-    except Exception as e:
-        log("llm err: %s" % str(e)[:120])
-        return None
+    models = [cfg.get("model", "deepseek-chat")] + list(cfg.get("fallback_models", []))
+    extra = cfg.get("headers", {}) or {}
+    for model in models:
+        body = {
+            "model": model,
+            "messages": [{"role": "system", "content": STYLE_SYSTEM},
+                         {"role": "user", "content": user_prompt}],
+            "temperature": cfg.get("temperature", 0.95),
+            "max_tokens": cfg.get("max_tokens", 300),
+        }
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+        headers.update(extra)
+        req = urllib.request.Request(
+            cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode(), method="POST", headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                d = json.loads(r.read().decode())
+            text = (d["choices"][0]["message"]["content"] or "").strip()
+            if text:
+                return text
+        except Exception as e:
+            log("llm %s err: %s" % (model, str(e)[:100]))
+            time.sleep(1.5)
+            continue
+    return None
 
 
 def gen_post(item):
